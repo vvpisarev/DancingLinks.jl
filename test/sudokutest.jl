@@ -60,12 +60,14 @@ end
 
 function sudoku(fill::AbstractMatrix{<:Integer})
     dlmatr = sudoku2dl(fill)
-    soln = sol2matr(algorithm_x!(dlmatr), size(fill))
+    cover = algorithm_x!(dlmatr)
+    isnothing(cover) && return
+    soln = sol2matr(cover, size(fill))
     soln .+= fill
     return soln
 end
 
-@btime sudoku(
+small_test() = @btime sudoku(
     [
         0 0 0 0 0 0 0 3 9;
         0 0 0 0 1 0 0 0 5;
@@ -79,8 +81,8 @@ end
     ]
     )
 
-#=
-@btime sudoku(
+
+med_test() = @btime sudoku(
     [
          0  0  0  0    0  0  0  0    0  0  0  3    0  0  9 12;
          0  0  0  0    3  0  8  0    9  1  0  4    0  0 14  0;
@@ -113,7 +115,7 @@ end
 
 mat2str(m) = prod(x->x+'0', m')
 
-@time open("sudoku_solns.txt", "w") do iosol
+large_test() = @time open("sudoku_solns.txt", "w") do iosol
     open("all_17_clue_sudokus.txt") do io
         numstr = readline(io)
         println(iosol, numstr)
@@ -129,6 +131,6 @@ end
 
 using SHA
 
-open("sudoku_solns.txt") do f
+test_soln_correct() = open("sudoku_solns.txt") do f
     sha2_256(f)
-end |> bytes2hex |> ==("0bc8dda364db7b99f389b42383e37b411d9fa022204d124cb3c8959eba252f05") |> println=#
+end |> bytes2hex |> ==("0bc8dda364db7b99f389b42383e37b411d9fa022204d124cb3c8959eba252f05") |> println

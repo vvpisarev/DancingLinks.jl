@@ -77,10 +77,10 @@ LinkMatrix(ids) = LinkMatrix{eltype(ids)}(ids)
 
 Base.isempty(m::LinkMatrix) = first(m.next) < 1
 
-id(matr::LinkMatrix, col::Int) = matr.id[col]
+@propagate_inbounds id(matr::LinkMatrix, col::Int) = matr.id[col]
 
-id(col::LinkColumn) = id(col.matr, col.idx)
-Base.length(col::LinkColumn) = col.matr.size[col.idx]
+@propagate_inbounds id(col::LinkColumn) = id(col.matr, col.idx)
+@propagate_inbounds Base.length(col::LinkColumn) = col.matr.size[col.idx]
 
 @propagate_inbounds function below(matr, row, col)
     searchrow = getrow(matr, row)
@@ -92,41 +92,43 @@ end
     return searchrow.above[col]
 end
 
-function Base.iterate(matr::LinkMatrix, ind=matr.firstcol)
+@propagate_inbounds function Base.iterate(matr::LinkMatrix, ind=matr.next[1])
     ind == 0 && return
     return LinkColumn(matr, ind), matr.next[ind]
 end
 
 @propagate_inbounds getrow(matr::LinkMatrix, irow::Integer) = matr.rows[irow+1]
 
-function algorithm_x!(root::LinkMatrix, solution=Cover(root, Int[])) where {T}
+function algorithm_x!(root::LinkMatrix, solution=Cover(root, Int[]))
     if isempty(root)
         return solution
     end
-    col = choose_col(root)
-    cover!(root, col)
-    nextrow, ind = below(root, 0, col)
-    @inbounds while nextrow != 0
-        row = getrow(root, nextrow)
-        push!(solution, nextrow)
-        for j in row.col
-            j == col || cover!(root, j)
+    @inbounds begin
+        col = choose_col(root)
+        cover!(root, col)
+        nextrow, ind = below(root, 0, col)
+        while nextrow != 0
+            row = getrow(root, nextrow)
+            push!(solution, nextrow)
+            for j in row.col
+                j == col || cover!(root, j)
+            end
+            if !isnothing(algorithm_x!(root, solution))
+                return solution
+            end
+            row = getrow(root, pop!(solution))
+            for j in Iterators.reverse(row.col)
+                j == col || uncover!(root, j)
+            end
+            nextrow, ind = below(root, nextrow, ind)
         end
-        if !isnothing(algorithm_x!(root, solution))
-            return solution
-        end
-        row = getrow(root, pop!(solution))
-        for j in Iterators.reverse(row.col)
-            j == col || uncover!(root, j)
-        end
-        nextrow, ind = below(root, nextrow, ind)
+        uncover!(root, col)
+        return
     end
-    uncover!(root, col)
-    return
 end
 
-function choose_col(root)
-    bestcol = root.next[1]
+@propagate_inbounds function choose_col(root)
+    bestcol = first(root.next)
     s = root.size[bestcol]
     col = root.next[bestcol+1]
     inds = eachindex(root.size)
@@ -157,7 +159,7 @@ end
     matr.size[getrow(matr, irow).col[i]] -= 1
 end
 
-function cover!(matr, col)
+@propagate_inbounds function cover!(matr, col)
     detach_rl!(matr, col)
     nextrow, ind = below(matr, 0, col)
     @inbounds while nextrow != 0
@@ -185,11 +187,11 @@ end
     matr.size[getrow(matr, irow).col[i]] += 1
 end
 
-function uncover!(matr, col)
+@propagate_inbounds function uncover!(matr, col)
     nextrow, ind = above(matr, 0, col)
     @inbounds while nextrow != 0
         row = getrow(matr, nextrow)
-        for i in eachindex(row.col)
+        for i in eachindex(row.above)
             i == ind || restore_ab!(matr, nextrow, i)
         end
         nextrow, ind = above(matr, nextrow, ind)
@@ -203,7 +205,7 @@ function insert_row!(root::LinkMatrix, col_ids)
     new_row = LinkRow(length(col_ids))
     nextind = 1
     id = root.id
-    for col in eachindex(id)
+    @inbounds for col in eachindex(id)
         if id[col] in col_ids
             new_row.col[nextind] = col
             nextind += 1
