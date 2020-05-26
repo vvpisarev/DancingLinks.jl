@@ -1,292 +1,227 @@
 module DancingLinks
 
-export Link, LinkColumn, LinkMatrix, RestRow, FullRow
-export insert_row!, find_col, id, algorithm_x!, cover!
+using Base: @propagate_inbounds
 
-mutable struct Link{T}
-    left::Link{T}
-    right::Link{T}
-    above::Link{T}
-    below::Link{T}
-    col::T
-    function Link(col::T) where T
-        result = new{T}()
-        result.above = result.below = result.right = result.left = result
-        result.col = col
-        return result
-    end
-    function Link{T}() where T
-        result = new{T}()
-        result.above = result.below = result.right = result.left = result
-        return result
-    end
-end
+export Cover, LinkMatrix, CoverRow, LinkColumn
+export insert_row!, algorithm_x!, id
 
-mutable struct LinkColumn{T}
-    links::Link{LinkColumn{T}}
-    size::Int
-    id::T
-    function LinkColumn{T}(id) where T
-        result = new{T}()
-        links = Link(result)
-        result.links = links
-        result.size = 0
-        result.id = id
-        return result
-    end
-end
-
-LinkColumn(id::T) where T = LinkColumn{T}(id)
-
-struct LinkMatrix{H<:LinkColumn}
-    columns::Link{H}
-    function LinkMatrix{H}(names) where {H<:LinkColumn}
-        cols = Link{H}()
-        root = new{H}(cols)
-        prev = cols
-        for name in names
-            col = H(name)
-            collinks = links(col)
-            collinks.left = prev
-            collinks.right = cols
-            prev.right = collinks
-            cols.left = collinks
-            prev = collinks
+struct LinkRow
+    above::Vector{Tuple{Int, Int}}
+    below::Vector{Tuple{Int, Int}}
+    col::Vector{Int}
+    function LinkRow(nlinks::Integer=0)
+        col = collect(1:nlinks)
+        above = similar(col, Tuple{Int, Int})
+        below = similar(col, Tuple{Int, Int})
+        self = new(above, below, col)
+        for i in eachindex(above, below)
+            above[i] = below[i] = (0, i)
         end
-        return root
+        return self
     end
 end
 
-columns(dlmatr::LinkMatrix) = dlmatr.columns
+LinkRow(root::M, nlinks::Integer=0) where {M} = LinkRow{M}(root, nlinks)
 
-function LinkMatrix(names)
-    T = LinkColumn{eltype(names)}
-    return LinkMatrix{T}(names)
+struct LinkMatrix{T}
+    id::Vector{T}
+    prev::Vector{Int}
+    next::Vector{Int}
+    size::Vector{Int}
+    rows::Vector{LinkRow}
+    function LinkMatrix{T}(ids) where {T}
+        id = collect(T, ids)
+        ncols = length(id)
+        vlink = LinkRow(ncols)
+        prev = collect(-1:ncols-1)
+        next = collect(1:ncols+1)
+        prev[1] = ncols
+        next[end] = 0
+        size = zeros(Int, ncols)
+        rows = [vlink]
+        self = new{T}(id, prev, next, size, rows)
+        return self
+    end
 end
 
-Base.show(io::IO, col::LinkColumn) = print(io, "Column $(id(col)) of size $(col.size)")
-
-Base.show(io::IO, dl::Link) = print(io, "Link in column $(id(dl)) of length $(dl.col.size)")
-
-Base.show(io::IO, dlmatr::LinkMatrix) = print(io, "Dancing links matrix")
-
-id(col::LinkColumn) = col.id
-id(dl::Link) = id(dl.col)
-
-Base.length(col::LinkColumn) = col.size
-
-right(dl::Link) = dl.right
-left(dl::Link) = dl.left
-above(dl::Link) = dl.above
-below(dl::Link) = dl.below
-
-links(col::LinkColumn) = col.links
-
-right(col::LinkColumn) = right(links(col))
-left(col::LinkColumn) = left(links(col))
-above(col::LinkColumn) = above(links(col))
-below(col::LinkColumn) = below(links(col))
-
-function Base.iterate(dlmatr::LinkMatrix, next = right(columns(dlmatr)))
-    next === columns(dlmatr) && return
-    return (next.col, right(next))
+struct Cover{M<:LinkMatrix}
+    matr::M
+    rows::Vector{Int}
 end
 
-function Base.iterate(col::LinkColumn, next = below(links(col)))
-    next === links(col) && return
-    return (next, below(next))
+struct CoverRow{M<:LinkMatrix}
+    matr::M
+    idx::Int
 end
 
-struct RestRow{T<:Link}
-    node::T
+struct LinkColumn{M<:LinkMatrix}
+    matr::M
+    idx::Int
 end
 
-struct FullRow{T<:Link}
-    node::T
+Base.push!(c::Cover, i::Integer) = push!(c.rows, i)
+Base.pop!(c::Cover) = pop!(c.rows)
+
+function Base.iterate(c::Cover, i::Integer=1)
+    i in eachindex(c.rows) || return
+    return CoverRow(c.matr, c.rows[i]), i+1
 end
 
-function Base.iterate(row::RestRow, next = right(row.node))
-    next === row.node && return
-    return (next, right(next))
+function Base.iterate(row::CoverRow, i::Integer=1)
+    linkrow = row.matr.rows[row.idx+1]
+    i in eachindex(linkrow.col) || return
+    return id(row.matr, linkrow.col[i]), i+1
 end
 
-function Base.iterate(row::FullRow)
-    node = row.node
-    return (node, right(node))
+LinkMatrix(ids) = LinkMatrix{eltype(ids)}(ids)
+
+Base.isempty(m::LinkMatrix) = first(m.next) < 1
+
+id(matr::LinkMatrix, col::Int) = matr.id[col]
+
+id(col::LinkColumn) = id(col.matr, col.idx)
+Base.length(col::LinkColumn) = col.matr.size[col.idx]
+
+@propagate_inbounds function below(matr, row, col)
+    searchrow = getrow(matr, row)
+    return searchrow.below[col]
 end
 
-function Base.iterate(row::FullRow{T}, next::T) where {T<:Link}
-    next === row.node && return
-    return (next, right(next))
+@propagate_inbounds function above(matr, row, col)
+    searchrow = getrow(matr, row)
+    return searchrow.above[col]
 end
 
-function Base.iterate(dlmatr::Iterators.Reverse{<:LinkMatrix}, next = left(columns(dlmatr.itr)))
-    next === columns(dlmatr.itr) && return
-    return (next.col, left(next))
+function Base.iterate(matr::LinkMatrix, ind=matr.firstcol)
+    ind == 0 && return
+    return LinkColumn(matr, ind), matr.next[ind]
 end
 
-function Base.iterate(col::Iterators.Reverse{<:LinkColumn}, next = above(links(col.itr)))
-    next === links(col.itr) && return
-    return (next, above(next))
-end
+@propagate_inbounds getrow(matr::LinkMatrix, irow::Integer) = matr.rows[irow+1]
 
-function Base.iterate(row::Iterators.Reverse{<:RestRow}, next = left(row.itr.node))
-    next === row.itr.node && return
-    return (next, left(next))
-end
-
-function Base.iterate(row::Iterators.Reverse{<:FullRow})
-    node = row.itr.node
-    return (left(node), left(node))
-end
-
-function Base.iterate(row::Iterators.Reverse{FullRow{T}}, next::T) where {T<:Link}
-    next === row.itr.node && return
-    return (left(next), left(next))
-end
-
-function Base.isempty(dlmatr::LinkMatrix)
-    cols = columns(dlmatr)
-    return cols === right(cols)
-end
-
-function algorithm_x!(root::LinkMatrix{T}, solution=FullRow{Link{T}}[]) where {T}
+function algorithm_x!(root::LinkMatrix, solution=Cover(root, Int[])) where {T}
     if isempty(root)
         return solution
     end
     col = choose_col(root)
-    cover!(col)
-    for node in col
-        push!(solution, FullRow(node))
-        for j in RestRow(node)
-            cover!(j.col)
+    cover!(root, col)
+    nextrow, ind = below(root, 0, col)
+    @inbounds while nextrow != 0
+        row = getrow(root, nextrow)
+        push!(solution, nextrow)
+        for j in row.col
+            j == col || cover!(root, j)
         end
         if !isnothing(algorithm_x!(root, solution))
             return solution
         end
-        node = pop!(solution).node
-        for j in Iterators.reverse(RestRow(node))
-            uncover!(j.col)
+        row = getrow(root, pop!(solution))
+        for j in Iterators.reverse(row.col)
+            j == col || uncover!(root, j)
         end
+        nextrow, ind = below(root, nextrow, ind)
     end
-    uncover!(col)
+    uncover!(root, col)
     return
 end
 
 function choose_col(root)
-    bestcol = right(columns(root)).col
-    s = length(bestcol)
-    for col in root
-        l = length(col)
+    bestcol = root.next[1]
+    s = root.size[bestcol]
+    col = root.next[bestcol+1]
+    inds = eachindex(root.size)
+    @inbounds while col in inds
+        l = root.size[col]
         if l < s
             s, bestcol = l, col
         end
+        col = root.next[col+1]
     end
     return bestcol
 end
 
-function detach_rl!(dl)
-    dl.right.left = dl.left
-    dl.left.right = dl.right
-    return dl
+@propagate_inbounds function detach_rl!(matr, col)
+    next, prev = matr.next[col+1], matr.prev[col+1]
+    matr.prev[next+1] = prev
+    matr.next[prev+1] = next
+    return col
 end
 
-function detach_ab!(dl::Link)
-    dl.above.below = dl.below
-    dl.below.above = dl.above
-    dl.col.size -= 1
-    return dl
+@propagate_inbounds function detach_ab!(matr, irow, i)
+    rabove, iabove = above(matr, irow, i)
+    rbelow, ibelow = below(matr, irow, i)
+    row_a = getrow(matr, rabove)
+    row_b = getrow(matr, rbelow)
+    row_a.below[iabove] = rbelow, ibelow
+    row_b.above[ibelow] = rabove, iabove
+    matr.size[getrow(matr, irow).col[i]] -= 1
 end
 
-function cover!(col)
-    detach_rl!(links(col))
-    for node in col
-        for elt in RestRow(node)
-            detach_ab!(elt)
+function cover!(matr, col)
+    detach_rl!(matr, col)
+    nextrow, ind = below(matr, 0, col)
+    @inbounds while nextrow != 0
+        row = getrow(matr, nextrow)
+        for i in eachindex(row.col)
+            i == ind || detach_ab!(matr, nextrow, i)
         end
+        nextrow, ind = below(matr, nextrow, ind)
     end
+    return col
 end
 
-function restore_rl!(dl)
-    dl.right.left = dl
-    dl.left.right = dl
-    return dl
+@propagate_inbounds function restore_rl!(matr, col)
+    next, prev = matr.next[col+1], matr.prev[col+1]
+    matr.prev[next+1] = matr.next[prev+1] = col
+    return col
 end
 
-function restore_ab!(dl::Link)
-    dl.above.below = dl
-    dl.below.above = dl
-    dl.col.size += 1
-    return dl
+@propagate_inbounds function restore_ab!(matr, irow, i)
+    rabove, iabove = above(matr, irow, i)
+    rbelow, ibelow = below(matr, irow, i)
+    row_a = getrow(matr, rabove)
+    row_b = getrow(matr, rbelow)
+    row_a.below[iabove] = row_b.above[ibelow] = irow, i
+    matr.size[getrow(matr, irow).col[i]] += 1
 end
 
-function uncover!(col)
-    for node in Iterators.reverse(col)
-        for elt in Iterators.reverse(RestRow(node))
-            restore_ab!(elt)
+function uncover!(matr, col)
+    nextrow, ind = above(matr, 0, col)
+    @inbounds while nextrow != 0
+        row = getrow(matr, nextrow)
+        for i in eachindex(row.col)
+            i == ind || restore_ab!(matr, nextrow, i)
         end
+        nextrow, ind = above(matr, nextrow, ind)
     end
-    restore_rl!(links(col))
+    restore_rl!(matr, col)
+    return col
 end
 
 function insert_row!(root::LinkMatrix, col_ids)
     isempty(col_ids) && return
-    num_inserted = 0
-    first_in_row = nothing
-    prevdl = nothing
-    for col in root
-        if id(col) in col_ids
-            newdl = Link(col)
-            if isnothing(first_in_row)
-                first_in_row = newdl
-            end
-            first_in_row.left = newdl
-            newdl.right = first_in_row
-            if !isnothing(prevdl)
-                prevdl.right = newdl
-                newdl.left = prevdl
-            end
-            prevdl = newdl
-            num_inserted += 1
+    new_row = LinkRow(length(col_ids))
+    nextind = 1
+    id = root.id
+    for col in eachindex(id)
+        if id[col] in col_ids
+            new_row.col[nextind] = col
+            nextind += 1
         end
-    end
-    if num_inserted == length(col_ids)
-        for node in FullRow(first_in_row)
-            col = node.col
-            collinks = links(col)
-            lastdl = above(collinks)
-            col.size += 1
-            node.above = lastdl
-            node.below = collinks
-            lastdl.below = node
-            collinks.above = node
+        if nextind > lastindex(new_row.col)
+            push!(root.rows, new_row)
+            nnew = lastindex(root.rows)-1
+            for i in eachindex(new_row.col)
+                icol = new_row.col[i]
+                lastrow, ilast = above(root, 0, icol)
+                new_row.above[i] = lastrow, ilast
+                new_row.below[i] = 0, icol
+                lastrow_a = getrow(root, lastrow)
+                lastrow_a.below[ilast] = getrow(root, 0).above[icol] = nnew, i
+                root.size[icol] += 1
+            end
+            return new_row
         end
-        return first_in_row
-    else
-        return
-    end
-end
-
-function dl_cols(names)
-    T = eltype(names)
-    root = LinkMatrix{T}()
-    rootlinks = columns(root)
-    prev = rootlinks
-    for name in names
-        col = LinkColumn{T}(name)
-        collinks = links(col)
-        collinks.left = prev
-        collinks.right = rootlinks
-        prev.right = collinks
-        rootlinks.left = collinks
-        prev = collinks
-    end
-    return root
-end
-
-function find_col(root, search_id)
-    for col in root
-        id(col) == search_id && return col
     end
     return
 end

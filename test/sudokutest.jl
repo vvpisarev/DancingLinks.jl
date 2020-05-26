@@ -1,5 +1,6 @@
 include("../src/dancinglinks.jl")
 using .DancingLinks
+using BenchmarkTools
 
 function sudoku2dl(fill::AbstractMatrix{<:Integer})
     ncells = size(fill)
@@ -46,12 +47,11 @@ end
 
 function row2indval(dlrow)
     row, col, n = 0,0,0
-    for j in dlrow
-        constr = id(j)
-        if constr[1] === :fill
-            _, row, col = constr
+    for col_id in dlrow
+        if col_id[1] === :fill
+            _, row, col = col_id
         else
-            _, _, n = constr
+            _, _, n = col_id
         end
         all(>(0), (row, col, n)) && break
     end
@@ -64,8 +64,6 @@ function sudoku(fill::AbstractMatrix{<:Integer})
     soln .+= fill
     return soln
 end
-
-using BenchmarkTools
 
 @btime sudoku(
     [
