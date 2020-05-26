@@ -2,33 +2,67 @@ module DancingLinks
 
 using Base: @propagate_inbounds
 
-export Cover, LinkMatrix, CoverRow, LinkColumn
-export insert_row!, algorithm_x!, id
+export Cover, LinkMatrix, CoverRow
+export insert_row!, algorithm_x!
+
+mutable struct Link{R}
+    above::Link{R}
+    below::Link{R}
+    row::R
+    col::Int
+    function Link{R}() where R
+        self = new{R}()
+        self.above = self.below = self
+        self.col = 0
+        return self
+    end    
+    function Link{R}(row) where R
+        self = new{R}()
+        self.above = self.below = self
+        self.row = row
+        self.col = 0
+        return self
+    end
+end
+
+Link(row::R) where R = Link{R}(row)
 
 struct LinkRow
-    above::Vector{Tuple{Int, Int}}
-    below::Vector{Tuple{Int, Int}}
-    col::Vector{Int}
+    links::Vector{Link{LinkRow}}
     function LinkRow(nlinks::Integer=0)
-        col = collect(1:nlinks)
-        above = similar(col, Tuple{Int, Int})
-        below = similar(col, Tuple{Int, Int})
-        self = new(above, below, col)
-        for i in eachindex(above, below)
-            above[i] = below[i] = (0, i)
+        links = [Link{LinkRow}() for _ in 1:nlinks]
+        self = new(links)
+        for (i,link) in enumerate(links)
+            link.row = self
+            link.col = i
         end
         return self
     end
 end
 
-LinkRow(root::M, nlinks::Integer=0) where {M} = LinkRow{M}(root, nlinks)
+@propagate_inbounds Base.getindex(r::LinkRow, i::Integer) = r.links[i]
+@propagate_inbounds Base.setindex!(r::LinkRow, val, i::Integer) = setindex!(r.links, val, i)
+Base.eachindex(r::LinkRow) = eachindex(r.links)
+Base.firstindex(r::LinkRow) = firstindex(r.links)
+Base.lastindex(r::LinkRow) = lastindex(r.links)
+
+function Base.iterate(row::LinkRow, i::Integer=1)
+    i in eachindex(row) || return
+    @inbounds return row[i], i+1
+end
+
+function Base.iterate(rrow::Iterators.Reverse{LinkRow}, i::Integer=lastindex(rrow.itr))
+    row = rrow.itr
+    i in eachindex(row) || return
+    @inbounds return row[i], i-1
+end
 
 struct LinkMatrix{T}
     id::Vector{T}
     prev::Vector{Int}
     next::Vector{Int}
     size::Vector{Int}
-    rows::Vector{LinkRow}
+    vlink::LinkRow
     function LinkMatrix{T}(ids) where {T}
         id = collect(T, ids)
         ncols = length(id)
@@ -38,28 +72,28 @@ struct LinkMatrix{T}
         prev[1] = ncols
         next[end] = 0
         size = zeros(Int, ncols)
-        rows = [vlink]
-        self = new{T}(id, prev, next, size, rows)
+        self = new{T}(id, prev, next, size, vlink)
         return self
     end
 end
 
+LinkMatrix(ids) = LinkMatrix{eltype(ids)}(ids)
+
+Base.isempty(m::LinkMatrix) = first(m.next) < 1
+
 struct Cover{M<:LinkMatrix}
     matr::M
-    rows::Vector{Int}
+    rows::Vector{LinkRow}
 end
+
+Cover(matr::LinkMatrix) = Cover(matr, LinkRow[])
 
 struct CoverRow{M<:LinkMatrix}
     matr::M
-    idx::Int
+    lrow::LinkRow
 end
 
-struct LinkColumn{M<:LinkMatrix}
-    matr::M
-    idx::Int
-end
-
-Base.push!(c::Cover, i::Integer) = push!(c.rows, i)
+Base.push!(c::Cover, row::LinkRow) = push!(c.rows, row)
 Base.pop!(c::Cover) = pop!(c.rows)
 
 function Base.iterate(c::Cover, i::Integer=1)
@@ -68,59 +102,36 @@ function Base.iterate(c::Cover, i::Integer=1)
 end
 
 function Base.iterate(row::CoverRow, i::Integer=1)
-    linkrow = row.matr.rows[row.idx+1]
-    i in eachindex(linkrow.col) || return
-    return id(row.matr, linkrow.col[i]), i+1
+    linkrow = row.lrow
+    i in eachindex(linkrow) || return
+    return id(row.matr, linkrow[i].col), i+1
 end
-
-LinkMatrix(ids) = LinkMatrix{eltype(ids)}(ids)
-
-Base.isempty(m::LinkMatrix) = first(m.next) < 1
 
 @propagate_inbounds id(matr::LinkMatrix, col::Int) = matr.id[col]
 
-@propagate_inbounds id(col::LinkColumn) = id(col.matr, col.idx)
-@propagate_inbounds Base.length(col::LinkColumn) = col.matr.size[col.idx]
-
-@propagate_inbounds function below(matr, row, col)
-    searchrow = getrow(matr, row)
-    return searchrow.below[col]
-end
-
-@propagate_inbounds function above(matr, row, col)
-    searchrow = getrow(matr, row)
-    return searchrow.above[col]
-end
-
-@propagate_inbounds function Base.iterate(matr::LinkMatrix, ind=matr.next[1])
-    ind == 0 && return
-    return LinkColumn(matr, ind), matr.next[ind]
-end
-
-@propagate_inbounds getrow(matr::LinkMatrix, irow::Integer) = matr.rows[irow+1]
-
-function algorithm_x!(root::LinkMatrix, solution=Cover(root, Int[]))
+function algorithm_x!(root::LinkMatrix, solution=Cover(root))
     if isempty(root)
         return solution
     end
     @inbounds begin
         col = choose_col(root)
         cover!(root, col)
-        nextrow, ind = below(root, 0, col)
-        while nextrow != 0
-            row = getrow(root, nextrow)
-            push!(solution, nextrow)
-            for j in row.col
-                j == col || cover!(root, j)
+        collink = root.vlink[col]
+        nextlink = collink.below
+        while nextlink !== collink
+            row = nextlink.row
+            push!(solution, row)
+            for link in row.links
+                link.col == col || cover!(root, link.col)
             end
             if !isnothing(algorithm_x!(root, solution))
                 return solution
             end
-            row = getrow(root, pop!(solution))
-            for j in Iterators.reverse(row.col)
-                j == col || uncover!(root, j)
+            row = pop!(solution)
+            for link in Iterators.reverse(row.links)
+                link.col == col || uncover!(root, link.col)
             end
-            nextrow, ind = below(root, nextrow, ind)
+            nextlink = nextlink.below
         end
         uncover!(root, col)
         return
@@ -130,11 +141,14 @@ end
 @propagate_inbounds function choose_col(root)
     bestcol = first(root.next)
     s = root.size[bestcol]
+    s < 2 && return bestcol
     col = root.next[bestcol+1]
     inds = eachindex(root.size)
     @inbounds while col in inds
         l = root.size[col]
-        if l < s
+        if l < 2
+            return col
+        elseif l < s
             s, bestcol = l, col
         end
         col = root.next[col+1]
@@ -149,25 +163,22 @@ end
     return col
 end
 
-@propagate_inbounds function detach_ab!(matr, irow, i)
-    rabove, iabove = above(matr, irow, i)
-    rbelow, ibelow = below(matr, irow, i)
-    row_a = getrow(matr, rabove)
-    row_b = getrow(matr, rbelow)
-    row_a.below[iabove] = rbelow, ibelow
-    row_b.above[ibelow] = rabove, iabove
-    matr.size[getrow(matr, irow).col[i]] -= 1
+@propagate_inbounds function detach_ab!(matr, link)
+    link.below.above = link.above
+    link.above.below = link.below
+    matr.size[link.col] -= 1
 end
 
 @propagate_inbounds function cover!(matr, col)
     detach_rl!(matr, col)
-    nextrow, ind = below(matr, 0, col)
-    @inbounds while nextrow != 0
-        row = getrow(matr, nextrow)
-        for i in eachindex(row.col)
-            i == ind || detach_ab!(matr, nextrow, i)
+    collink = matr.vlink[col]
+    nextlink = collink.below
+    @inbounds while nextlink !== collink
+        row = nextlink.row
+        for link in row.links
+            link.col == col || detach_ab!(matr, link)
         end
-        nextrow, ind = below(matr, nextrow, ind)
+        nextlink = nextlink.below
     end
     return col
 end
@@ -178,23 +189,20 @@ end
     return col
 end
 
-@propagate_inbounds function restore_ab!(matr, irow, i)
-    rabove, iabove = above(matr, irow, i)
-    rbelow, ibelow = below(matr, irow, i)
-    row_a = getrow(matr, rabove)
-    row_b = getrow(matr, rbelow)
-    row_a.below[iabove] = row_b.above[ibelow] = irow, i
-    matr.size[getrow(matr, irow).col[i]] += 1
+@propagate_inbounds function restore_ab!(matr, link)
+    link.below.above = link.above.below = link
+    matr.size[link.col] += 1
 end
 
 @propagate_inbounds function uncover!(matr, col)
-    nextrow, ind = above(matr, 0, col)
-    @inbounds while nextrow != 0
-        row = getrow(matr, nextrow)
-        for i in eachindex(row.above)
-            i == ind || restore_ab!(matr, nextrow, i)
+    collink = matr.vlink[col]
+    nextlink = collink.above
+    @inbounds while nextlink !== collink
+        row = nextlink.row
+        for link in row.links
+            link.col == col || restore_ab!(matr, link)
         end
-        nextrow, ind = above(matr, nextrow, ind)
+        nextlink = nextlink.above
     end
     restore_rl!(matr, col)
     return col
@@ -203,23 +211,21 @@ end
 function insert_row!(root::LinkMatrix, col_ids)
     isempty(col_ids) && return
     new_row = LinkRow(length(col_ids))
+    links = new_row.links
     nextind = 1
     id = root.id
     @inbounds for col in eachindex(id)
         if id[col] in col_ids
-            new_row.col[nextind] = col
+            links[nextind].col = col
             nextind += 1
         end
-        if nextind > lastindex(new_row.col)
-            push!(root.rows, new_row)
-            nnew = lastindex(root.rows)-1
-            for i in eachindex(new_row.col)
-                icol = new_row.col[i]
-                lastrow, ilast = above(root, 0, icol)
-                new_row.above[i] = lastrow, ilast
-                new_row.below[i] = 0, icol
-                lastrow_a = getrow(root, lastrow)
-                lastrow_a.below[ilast] = getrow(root, 0).above[icol] = nnew, i
+        if nextind > lastindex(links)
+            for link in links
+                icol = link.col
+                collink = root.vlink[icol]
+                link.below = collink
+                link.above = collink.above
+                link.above.below = collink.above = link
                 root.size[icol] += 1
             end
             return new_row
