@@ -143,8 +143,7 @@ end
     s = root.size[bestcol]
     s < 2 && return bestcol
     col = root.next[bestcol+1]
-    inds = eachindex(root.size)
-    @inbounds while col in inds
+    while col > 0
         l = root.size[col]
         if l < 2
             return col

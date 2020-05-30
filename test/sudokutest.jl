@@ -8,27 +8,26 @@ function sudoku2dl(fill::AbstractMatrix{<:Integer})
     side == ncells[2] || throw(ArgumentError("Invalid matrix size $ncells"))
     blockside = isqrt(side)
     blockside^2 == side || throw(ArgumentError("Side $side is not a full square"))
-    row_constr = trues(ncells)
-    col_constr = trues(ncells)
-    blk_constr = trues(ncells)
+    constr = Base.fill(true, (side, side, 4))
     for col in 1:side, row in 1:side
         num = fill[row,col]
         if num in 1:side
             block = col - (col - 1) % blockside + (row - 1) ÷ blockside
-            row_constr[row, num] = false
-            col_constr[col, num] = false
-            blk_constr[block, num] = false
+            constr[row, num, 1] = false
+            constr[col, num, 2] = false
+            constr[block, num, 3] = false
+            constr[row, col, 4] = false
         end
     end
-    constr = sizehint!(Tuple{Symbol, Int, Int}[], 4 * prod(ncells))
-    append!(constr, (:row, row, num) for row in 1:side, num in 1:side if row_constr[row,num])
-    append!(constr, (:col, col, num) for col in 1:side, num in 1:side if col_constr[col,num])
-    append!(constr, (:block, block, num) for block in 1:side, num in 1:side if blk_constr[block,num])
-    append!(constr, (:fill, row, col) for row in 1:side, col in 1:side if !(fill[row,col] in 1:side))
-    dlmatr = LinkMatrix(constr)
+    idconstr = sizehint!(Tuple{Symbol, Int, Int}[], 4 * prod(ncells))
+    append!(idconstr, (:row, row, num) for row in 1:side, num in 1:side if constr[row,num,1])
+    append!(idconstr, (:col, col, num) for col in 1:side, num in 1:side if constr[col,num,2])
+    append!(idconstr, (:block, block, num) for block in 1:side, num in 1:side if constr[block,num,3])
+    append!(idconstr, (:fill, row, col) for row in 1:side, col in 1:side if constr[row,col,4])
+    dlmatr = LinkMatrix(idconstr)
     for row in 1:side, col in 1:side, num in 1:side
         block = col - (col - 1) % blockside + (row - 1) ÷ blockside
-        if row_constr[row,num] && col_constr[col,num] && blk_constr[block,num] && !(fill[row,col] in 1:side)
+        if constr[row,num,1] && constr[col,num,2] && constr[block,num,3] && constr[row,col,4]
             col_ids = (:row, row, num), (:col, col, num), (:block, block, num), (:fill, row, col)
             insert_row!(dlmatr, col_ids)
         end
@@ -80,7 +79,6 @@ small_test() = @btime sudoku(
         4 0 0 7 0 0 0 0 0
     ]
     )
-
 
 med_test() = @btime sudoku(
     [
