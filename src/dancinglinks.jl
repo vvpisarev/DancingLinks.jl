@@ -1,7 +1,7 @@
 module DancingLinks
 
 export Link, LinkColumn, LinkMatrix, RestRow, FullRow
-export insert_row!, find_col, id, algorithm_x!, cover!
+export insert_row!, find_col, id, algorithm_x!, complete_algorithm_x!, cover!
 
 mutable struct Link{T}
     left::Link{T}
@@ -150,6 +150,11 @@ function Base.isempty(dlmatr::LinkMatrix)
     return cols === right(cols)
 end
 
+# add isempty function for LinkColumn
+Function Base.isempty(linkcolumn::LinkColumn)
+    return length(linkcolumn) == 0
+end
+
 function algorithm_x!(root::LinkMatrix{T}, solution=FullRow{Link{T}}[]) where {T}
     if isempty(root)
         return solution
@@ -171,6 +176,50 @@ function algorithm_x!(root::LinkMatrix{T}, solution=FullRow{Link{T}}[]) where {T
     end
     uncover!(col)
     return
+end
+
+# add function to search for all solution of dancing links
+
+function all_algorithm_x!(root::LinkMatrix{T}, all_solution::Array{Any, 1}, solution = FullRow{Link{T}}[]) where {T}
+    
+    if isempty(root)
+        push!(all_solution, copy(solution))
+        return nothing
+    end
+    
+    col = choose_col(root)
+    
+    if isempty(col)
+        return nothing
+    end
+    
+    cover!(col)
+    
+    for node in col
+        push!(solution, FullRow(node))
+        for j in RestRow(node)
+            cover!(j.col)
+        end
+        
+        all_algorithm_x!(root, all_solution, solution)
+
+        node = pop!(solution).node
+        for j in Iterators.reverse(RestRow(node))
+            uncover!(j.col)
+        end
+    end
+    
+    uncover!(col)
+    
+    return nothing
+end
+
+function complete_algorithm_x!(root::LinkMatrix{T}) where T
+    
+    result = []
+    all_algorithm_x!(root, result)
+    return result
+    
 end
 
 function choose_col(root)
